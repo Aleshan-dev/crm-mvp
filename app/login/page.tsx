@@ -29,33 +29,29 @@ export default function LoginPage() {
   async function handleGoogle() {
     setGoogleLoading(true)
     setError('')
+
+    // Always use the production Vercel URL for redirect
+    const redirectTo = 'https://project-5s2kg.vercel.app/auth/callback'
+
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-      },
+      options: { redirectTo },
     })
     if (error) {
-      setError('Erro ao conectar com Google. Tente novamente.')
+      setError('Erro ao conectar com Google. Verifique se o OAuth está configurado no Supabase.')
       setGoogleLoading(false)
     }
   }
 
   return (
     <div style={{
-      minHeight: '100vh',
-      background: 'var(--bg)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: '24px',
+      minHeight: '100vh', background: 'var(--bg)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px',
     }}>
-      {/* Background grid */}
       <div style={{
         position: 'fixed', inset: 0, pointerEvents: 'none',
         backgroundImage: 'linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px)',
-        backgroundSize: '60px 60px',
-        opacity: 0.4,
+        backgroundSize: '60px 60px', opacity: 0.4,
       }} />
       <div style={{
         position: 'fixed', top: '20%', left: '50%', transform: 'translateX(-50%)',
@@ -65,7 +61,6 @@ export default function LoginPage() {
       }} />
 
       <div className="fade-in" style={{ position: 'relative', width: '100%', maxWidth: '400px' }}>
-        {/* Logo */}
         <div style={{ textAlign: 'center', marginBottom: '40px' }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
             <div style={{
@@ -94,16 +89,15 @@ export default function LoginPage() {
             style={{
               width: '100%', padding: '11px 16px',
               background: 'var(--bg-surface)', border: '1px solid var(--border-light)',
-              borderRadius: '8px', cursor: 'pointer',
+              borderRadius: '8px', cursor: googleLoading ? 'wait' : 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
               color: 'var(--text-primary)', fontSize: '14px', fontWeight: 500,
               transition: 'all 0.2s', marginBottom: '20px',
+              opacity: googleLoading ? 0.7 : 1,
             }}
-            onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
-            onMouseLeave={e => (e.currentTarget.style.background = 'var(--bg-surface)')}
           >
             {googleLoading ? (
-              <span style={{ color: 'var(--text-muted)' }}>Conectando...</span>
+              <span style={{ color: 'var(--text-muted)' }}>Conectando com Google...</span>
             ) : (
               <>
                 <svg width="18" height="18" viewBox="0 0 24 24">
@@ -117,46 +111,29 @@ export default function LoginPage() {
             )}
           </button>
 
-          {/* Divider */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
             <div style={{ flex: 1, height: '1px', background: 'var(--border)' }} />
             <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>ou</span>
             <div style={{ flex: 1, height: '1px', background: 'var(--border)' }} />
           </div>
 
-          {/* Email/Password form */}
           <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div>
               <label className="label">E-mail</label>
-              <input
-                className="input"
-                type="email"
-                placeholder="seu@email.com"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                required
-              />
+              <input className="input" type="email" placeholder="seu@email.com"
+                value={email} onChange={e => setEmail(e.target.value)} required />
             </div>
             <div>
               <label className="label">Senha</label>
-              <input
-                className="input"
-                type="password"
-                placeholder="••••••••"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                required
-              />
+              <input className="input" type="password" placeholder="••••••••"
+                value={password} onChange={e => setPassword(e.target.value)} required />
             </div>
 
             {error && (
               <div style={{
                 background: 'var(--red-dim)', border: '1px solid rgba(224,82,82,0.2)',
-                borderRadius: '8px', padding: '10px 14px',
-                color: 'var(--red)', fontSize: '13px',
-              }}>
-                {error}
-              </div>
+                borderRadius: '8px', padding: '10px 14px', color: 'var(--red)', fontSize: '13px',
+              }}>{error}</div>
             )}
 
             <button className="btn-primary" type="submit" disabled={loading}
