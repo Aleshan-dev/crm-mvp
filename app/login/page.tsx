@@ -29,76 +29,42 @@ export default function LoginPage() {
   async function handleGoogle() {
     setGoogleLoading(true)
     setError('')
-
-    // Always use the production Vercel URL for redirect
-    const redirectTo = 'https://project-5s2kg.vercel.app/auth/callback'
-
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
-      options: { redirectTo },
+      options: {
+        redirectTo: 'https://project-5s2kg.vercel.app/auth/callback',
+        scopes: 'email profile https://www.googleapis.com/auth/calendar.events',
+        queryParams: { access_type: 'offline', prompt: 'consent' },
+      },
     })
     if (error) {
-      setError('Erro ao conectar com Google. Verifique se o OAuth está configurado no Supabase.')
+      setError('Erro ao conectar com Google.')
       setGoogleLoading(false)
     }
   }
 
   return (
-    <div style={{
-      minHeight: '100vh', background: 'var(--bg)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px',
-    }}>
-      <div style={{
-        position: 'fixed', inset: 0, pointerEvents: 'none',
-        backgroundImage: 'linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px)',
-        backgroundSize: '60px 60px', opacity: 0.4,
-      }} />
-      <div style={{
-        position: 'fixed', top: '20%', left: '50%', transform: 'translateX(-50%)',
-        width: '600px', height: '400px',
-        background: 'radial-gradient(ellipse, rgba(200,169,110,0.07) 0%, transparent 70%)',
-        pointerEvents: 'none',
-      }} />
+    <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+      <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none', backgroundImage: 'linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px)', backgroundSize: '60px 60px', opacity: 0.4 }} />
+      <div style={{ position: 'fixed', top: '20%', left: '50%', transform: 'translateX(-50%)', width: '600px', height: '400px', background: 'radial-gradient(ellipse, rgba(200,169,110,0.07) 0%, transparent 70%)', pointerEvents: 'none' }} />
 
       <div className="fade-in" style={{ position: 'relative', width: '100%', maxWidth: '400px' }}>
         <div style={{ textAlign: 'center', marginBottom: '40px' }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
-            <div style={{
-              width: '38px', height: '38px', background: 'var(--accent)',
-              borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>
+            <div style={{ width: '38px', height: '38px', background: 'var(--accent)', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <span style={{ fontSize: '18px', fontFamily: 'Syne', fontWeight: 800, color: '#0a0b0f' }}>P</span>
             </div>
-            <span style={{ fontFamily: 'Syne', fontWeight: 700, fontSize: '22px', letterSpacing: '-0.02em' }}>
-              Polis OS
-            </span>
+            <span style={{ fontFamily: 'Syne', fontWeight: 700, fontSize: '22px', letterSpacing: '-0.02em' }}>Polis OS</span>
           </div>
           <p style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Sistema de Execução Política</p>
         </div>
 
         <div className="card" style={{ padding: '32px' }}>
           <h2 style={{ fontSize: '18px', marginBottom: '6px' }}>Entrar na plataforma</h2>
-          <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginBottom: '24px' }}>
-            Acesso restrito a membros da equipe Polis
-          </p>
+          <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginBottom: '24px' }}>Acesso restrito a membros da equipe Polis</p>
 
-          {/* Google Button */}
-          <button
-            onClick={handleGoogle}
-            disabled={googleLoading}
-            style={{
-              width: '100%', padding: '11px 16px',
-              background: 'var(--bg-surface)', border: '1px solid var(--border-light)',
-              borderRadius: '8px', cursor: googleLoading ? 'wait' : 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
-              color: 'var(--text-primary)', fontSize: '14px', fontWeight: 500,
-              transition: 'all 0.2s', marginBottom: '20px',
-              opacity: googleLoading ? 0.7 : 1,
-            }}
-          >
-            {googleLoading ? (
-              <span style={{ color: 'var(--text-muted)' }}>Conectando com Google...</span>
-            ) : (
+          <button onClick={handleGoogle} disabled={googleLoading} style={{ width: '100%', padding: '11px 16px', background: 'var(--bg-surface)', border: '1px solid var(--border-light)', borderRadius: '8px', cursor: googleLoading ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', color: 'var(--text-primary)', fontSize: '14px', fontWeight: 500, transition: 'all 0.2s', marginBottom: '20px', opacity: googleLoading ? 0.7 : 1 }}>
+            {googleLoading ? <span style={{ color: 'var(--text-muted)' }}>Conectando...</span> : (
               <>
                 <svg width="18" height="18" viewBox="0 0 24 24">
                   <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -106,7 +72,7 @@ export default function LoginPage() {
                   <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
                   <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
                 </svg>
-                Entrar com Google
+                Entrar com Google + Calendário
               </>
             )}
           </button>
@@ -120,32 +86,19 @@ export default function LoginPage() {
           <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div>
               <label className="label">E-mail</label>
-              <input className="input" type="email" placeholder="seu@email.com"
-                value={email} onChange={e => setEmail(e.target.value)} required />
+              <input className="input" type="email" placeholder="seu@email.com" value={email} onChange={e => setEmail(e.target.value)} required />
             </div>
             <div>
               <label className="label">Senha</label>
-              <input className="input" type="password" placeholder="••••••••"
-                value={password} onChange={e => setPassword(e.target.value)} required />
+              <input className="input" type="password" placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} required />
             </div>
-
-            {error && (
-              <div style={{
-                background: 'var(--red-dim)', border: '1px solid rgba(224,82,82,0.2)',
-                borderRadius: '8px', padding: '10px 14px', color: 'var(--red)', fontSize: '13px',
-              }}>{error}</div>
-            )}
-
-            <button className="btn-primary" type="submit" disabled={loading}
-              style={{ width: '100%', justifyContent: 'center', padding: '11px', marginTop: '2px' }}>
+            {error && <div style={{ background: 'var(--red-dim)', border: '1px solid rgba(224,82,82,0.2)', borderRadius: '8px', padding: '10px 14px', color: 'var(--red)', fontSize: '13px' }}>{error}</div>}
+            <button className="btn-primary" type="submit" disabled={loading} style={{ width: '100%', justifyContent: 'center', padding: '11px', marginTop: '2px' }}>
               {loading ? 'Entrando...' : 'Entrar com e-mail'}
             </button>
           </form>
         </div>
-
-        <p style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px', marginTop: '20px' }}>
-          Polis Assessoria Política © 2025
-        </p>
+        <p style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px', marginTop: '20px' }}>Polis Assessoria Política © 2025</p>
       </div>
     </div>
   )
