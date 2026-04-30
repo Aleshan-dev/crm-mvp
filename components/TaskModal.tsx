@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useApp } from '@/components/AppShell'
 import type { Task, UserProfile } from '@/lib/types'
-import { statusLabel, priorityLabel, moduleLabel, formatDate, statusClass, priorityClass } from '@/lib/utils'
+import { statusLabel, priorityLabel, moduleLabel, formatDate } from '@/lib/utils'
 
 interface TaskModalProps {
   task?: Task | null
@@ -11,13 +11,33 @@ interface TaskModalProps {
   onSave: () => void
 }
 
+async function syncToCalendar(task: Task) {
+  if (!task.due_date || !task.responsible_user) return
+  try {
+    await fetch('/api/calendar-sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        taskId: task.id,
+        title: task.title,
+        description: task.description,
+        dueDate: task.due_date,
+        priority: task.priority,
+        module: task.module,
+        responsibleUserId: task.responsible_user,
+      }),
+    })
+  } catch (e) {
+    console.warn('Calendar sync failed silently:', e)
+  }
+}
+
 export default function TaskModal({ task, onClose, onSave }: TaskModalProps) {
   const { currentClientId, user } = useApp()
   const supabase = createClient()
   const [users, setUsers] = useState<UserProfile[]>([])
   const [loading, setLoading] = useState(false)
-  const [calLoading, setCalLoading] = useState(false)
-  const [calStatus, setCalStatus] = useState<{ type: 'success' | 'error' | 'warn'; msg: string } | null>(null)
+  const [calStatus, setCalStatus] = useState<{ type: 'success' | 'warn'; msg: string } | null>(null)
   const [mode, setMode] = useState<'view' | 'edit'>(task ? 'view' : 'edit')
 
   const canEdit = ['administrador', 'polis', 'cliente_admin', 'cliente_operacional'].includes(user?.role || '')
@@ -31,7 +51,6 @@ export default function TaskModal({ task, onClose, onSave }: TaskModalProps) {
     status: task?.status || 'pendente',
     strategic_objective: task?.strategic_objective || '',
     target_audience: task?.target_audience || '',
-    related_theme: task?.related_theme || '',
     expected_outcome: task?.expected_outcome || '',
     due_date: task?.due_date || '',
   })
@@ -54,6 +73,7 @@ export default function TaskModal({ task, onClose, onSave }: TaskModalProps) {
       return
     }
     setLoading(true)
+
     let savedTask: Task | null = null
     if (task) {
       const { data } = await supabase.from('tasks').update({ ...form }).eq('id', task.id).select().single()
@@ -64,53 +84,62 @@ export default function TaskModal({ task, onClose, onSave }: TaskModalProps) {
       }).select().single()
       savedTask = data
     }
+
     setLoading(false)
 
-    // Auto-sync to calendar if task has a due date
-    if (savedTask?.due_date) {
-      syncToCalendar(savedTask, true)
+    // Auto-sync to responsible user's Google Calendar (silent, non-blocking)
+    if (savedTask?.due_date && savedTask?.responsible_user) {
+      const syncRes = await fetch('/api/calendar-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: savedTask.id,
+          title: savedTask.title,
+          description: savedTask.description,
+          dueDate: savedTask.due_date,
+          priority: savedTask.priority,
+          module: savedTask.module,
+          responsibleUserId: savedTask.responsible_user,
+        }),
+      })
+      const syncData = await syncRes.json()
+      if (syncData.error === 'no_google_token') {
+        // Store a warning to show after modal closes
+        sessionStorage.setItem('cal_warning', syncData.message)
+      }
     }
 
     onSave()
     onClose()
   }
 
-  async function syncToCalendar(t: Task, silent = false) {
-    if (!t.due_date) {
-      setCalStatus({ type: 'warn', msg: 'Defina um prazo para sincronizar com o calendário.' })
+  async function handleManualSync() {
+    if (!task) return
+    if (!task.due_date) {
+      setCalStatus({ type: 'warn', msg: 'Defina um prazo para sincronizar.' })
       return
     }
-    if (!silent) setCalLoading(true)
     setCalStatus(null)
-
-    try {
-      const res = await fetch('/api/calendar-sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          taskId: t.id,
-          title: t.title,
-          description: t.description,
-          dueDate: t.due_date,
-          priority: t.priority,
-          module: t.module,
-        }),
-      })
-      const data = await res.json()
-
-      if (!res.ok) {
-        if (data.needsGoogleLogin) {
-          setCalStatus({ type: 'warn', msg: 'Faça login com Google para sincronizar o calendário.' })
-        } else {
-          setCalStatus({ type: 'error', msg: data.error || 'Erro ao sincronizar.' })
-        }
-      } else {
-        setCalStatus({ type: 'success', msg: '✓ Evento criado no Google Calendar!' })
-      }
-    } catch {
-      setCalStatus({ type: 'error', msg: 'Erro de conexão.' })
-    } finally {
-      if (!silent) setCalLoading(false)
+    const res = await fetch('/api/calendar-sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        taskId: task.id,
+        title: task.title,
+        description: task.description,
+        dueDate: task.due_date,
+        priority: task.priority,
+        module: task.module,
+        responsibleUserId: task.responsible_user,
+      }),
+    })
+    const data = await res.json()
+    if (data.success) {
+      setCalStatus({ type: 'success', msg: '✓ Evento criado no Google Calendar do responsável!' })
+    } else if (data.error === 'no_google_token') {
+      setCalStatus({ type: 'warn', msg: 'O responsável não conectou o Google Calendar ainda. Peça que ele entre no Polis OS com a conta Google.' })
+    } else {
+      setCalStatus({ type: 'warn', msg: data.message || data.error || 'Erro ao sincronizar.' })
     }
   }
 
@@ -119,22 +148,18 @@ export default function TaskModal({ task, onClose, onSave }: TaskModalProps) {
     const update: Record<string, unknown> = { status: newStatus }
     if (newStatus === 'concluida') update.completed_at = new Date().toISOString()
     await supabase.from('tasks').update(update).eq('id', task.id)
-    onSave()
-    onClose()
+    onSave(); onClose()
   }
 
   return (
     <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div className="modal-box">
-        {/* Header */}
         <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
             <h3 style={{ fontSize: '16px', fontWeight: 700 }}>
               {task ? (mode === 'view' ? 'Detalhes da Ação' : 'Editar Ação') : 'Nova Ação da Campanha'}
             </h3>
-            {task && mode === 'view' && (
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>Criada em {formatDate(task.created_at)}</p>
-            )}
+            {task && mode === 'view' && <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>Criada em {formatDate(task.created_at)}</p>}
           </div>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             {task && mode === 'view' && canEdit && (
@@ -147,7 +172,6 @@ export default function TaskModal({ task, onClose, onSave }: TaskModalProps) {
         <div style={{ padding: '24px' }}>
           {mode === 'view' && task ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              {/* Status quick-change */}
               {canEdit && (
                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                   {(['pendente', 'em_andamento', 'concluida', 'cancelada'] as const).map(s => (
@@ -156,9 +180,7 @@ export default function TaskModal({ task, onClose, onSave }: TaskModalProps) {
                       border: '1px solid var(--border)',
                       background: task.status === s ? 'var(--accent-glow)' : 'var(--bg-surface)',
                       color: task.status === s ? 'var(--accent)' : 'var(--text-muted)',
-                    }}>
-                      {statusLabel(s)}
-                    </button>
+                    }}>{statusLabel(s)}</button>
                   ))}
                 </div>
               )}
@@ -193,71 +215,49 @@ export default function TaskModal({ task, onClose, onSave }: TaskModalProps) {
                 </div>
               )}
 
-              {/* Google Calendar sync button */}
-              {task.due_date && (
-                <div style={{ borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-                    <button
-                      onClick={() => syncToCalendar(task)}
-                      disabled={calLoading}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: '8px',
-                        padding: '8px 16px', borderRadius: '8px',
-                        background: 'var(--bg-surface)', border: '1px solid var(--border)',
-                        cursor: calLoading ? 'wait' : 'pointer', color: 'var(--text-primary)',
-                        fontSize: '13px', transition: 'all 0.15s',
-                        opacity: calLoading ? 0.7 : 1,
-                      }}
-                    >
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-                        <rect x="3" y="4" width="18" height="18" rx="2" stroke="#4285F4" strokeWidth="2"/>
-                        <path d="M16 2v4M8 2v4M3 10h18" stroke="#4285F4" strokeWidth="2" strokeLinecap="round"/>
-                        <path d="M8 14h2v2H8v-2z" fill="#34A853"/>
-                        <path d="M11 14h2v2h-2v-2z" fill="#FBBC05"/>
-                        <path d="M14 14h2v2h-2v-2z" fill="#EA4335"/>
-                      </svg>
-                      {calLoading ? 'Sincronizando...' : 'Sincronizar com Google Calendar'}
-                    </button>
-
-                    {/* Quick add link (works without OAuth) */}
-                    <a
-                      href={buildGCalLink(task)}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: '6px',
-                        fontSize: '12px', color: 'var(--text-muted)',
-                        textDecoration: 'none',
-                      }}
-                    >
-                      ↗ Abrir no calendário
-                    </a>
-                  </div>
-
-                  {calStatus && (
-                    <div style={{
-                      marginTop: '10px', padding: '8px 12px', borderRadius: '6px', fontSize: '12px',
-                      background: calStatus.type === 'success' ? 'var(--green-dim)' : calStatus.type === 'warn' ? 'var(--yellow-dim)' : 'var(--red-dim)',
-                      color: calStatus.type === 'success' ? 'var(--green)' : calStatus.type === 'warn' ? 'var(--yellow)' : 'var(--red)',
-                      border: `1px solid ${calStatus.type === 'success' ? 'rgba(82,183,136,0.2)' : calStatus.type === 'warn' ? 'rgba(224,166,82,0.2)' : 'rgba(224,82,82,0.2)'}`,
+              {/* Calendar section */}
+              <div style={{ borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'Syne', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Google Calendar</span>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button onClick={handleManualSync} style={{
+                    display: 'flex', alignItems: 'center', gap: '8px',
+                    padding: '8px 14px', borderRadius: '8px',
+                    background: 'var(--bg-surface)', border: '1px solid var(--border)',
+                    cursor: 'pointer', color: 'var(--text-primary)', fontSize: '13px',
+                  }}>
+                    <CalendarIcon />
+                    Sincronizar com calendário do responsável
+                  </button>
+                  {task.due_date && (
+                    <a href={buildGCalLink(task)} target="_blank" rel="noreferrer" style={{
+                      display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 14px',
+                      borderRadius: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border)',
+                      color: 'var(--text-muted)', fontSize: '13px', textDecoration: 'none',
                     }}>
-                      {calStatus.msg}
-                      {calStatus.type === 'warn' && calStatus.msg.includes('Google') && (
-                        <span style={{ marginLeft: '8px' }}>
-                          <a href="/login" style={{ color: 'var(--accent)', textDecoration: 'underline' }}>Entrar com Google</a>
-                        </span>
-                      )}
-                    </div>
+                      ↗ Abrir no meu calendário
+                    </a>
                   )}
                 </div>
-              )}
+                {calStatus && (
+                  <div style={{
+                    marginTop: '10px', padding: '10px 14px', borderRadius: '8px', fontSize: '13px',
+                    background: calStatus.type === 'success' ? 'var(--green-dim)' : 'var(--yellow-dim)',
+                    color: calStatus.type === 'success' ? 'var(--green)' : 'var(--yellow)',
+                    border: `1px solid ${calStatus.type === 'success' ? 'rgba(82,183,136,0.2)' : 'rgba(224,166,82,0.2)'}`,
+                    lineHeight: 1.5,
+                  }}>
+                    {calStatus.msg}
+                  </div>
+                )}
+              </div>
             </div>
           ) : (
-            /* EDIT MODE */
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div>
                 <label className="label">Título da Ação *</label>
-                <input className="input" placeholder="Ex: Criar material de mobilização para bairro X" value={form.title} onChange={e => setForm(p => ({ ...p, title: e.target.value }))} />
+                <input className="input" placeholder="Ex: Criar material de mobilização" value={form.title} onChange={e => setForm(p => ({ ...p, title: e.target.value }))} />
               </div>
               <div>
                 <label className="label">Descrição</label>
@@ -312,20 +312,18 @@ export default function TaskModal({ task, onClose, onSave }: TaskModalProps) {
               </div>
               <div>
                 <label className="label">Objetivo Estratégico *</label>
-                <textarea className="textarea" placeholder="Como esta ação conecta à estratégia da campanha?" value={form.strategic_objective} onChange={e => setForm(p => ({ ...p, strategic_objective: e.target.value }))} />
+                <textarea className="textarea" placeholder="Como esta ação conecta à estratégia?" value={form.strategic_objective} onChange={e => setForm(p => ({ ...p, strategic_objective: e.target.value }))} />
               </div>
               <div>
                 <label className="label">Resultado Esperado</label>
-                <textarea className="textarea" placeholder="O que deve acontecer após a conclusão desta ação?" value={form.expected_outcome} onChange={e => setForm(p => ({ ...p, expected_outcome: e.target.value }))} style={{ minHeight: '64px' }} />
+                <textarea className="textarea" value={form.expected_outcome} placeholder="O que deve acontecer após a conclusão?" onChange={e => setForm(p => ({ ...p, expected_outcome: e.target.value }))} style={{ minHeight: '64px' }} />
               </div>
-
-              {form.due_date && (
-                <div style={{ background: 'var(--blue-dim)', border: '1px solid rgba(82,130,224,0.15)', borderRadius: '8px', padding: '10px 14px', fontSize: '12px', color: 'var(--blue)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="2"/><path d="M16 2v4M8 2v4M3 10h18" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
-                  Ao salvar, esta ação será sincronizada automaticamente com seu Google Calendar (se conectado via Google).
+              {form.due_date && form.responsible_user && (
+                <div style={{ background: 'var(--green-dim)', border: '1px solid rgba(82,183,136,0.2)', borderRadius: '8px', padding: '10px 14px', fontSize: '12px', color: 'var(--green)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <CalendarIcon />
+                  Ao salvar, será criado automaticamente um evento no Google Calendar do responsável.
                 </div>
               )}
-
               <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', paddingTop: '8px' }}>
                 <button className="btn-secondary" onClick={onClose}>Cancelar</button>
                 <button className="btn-primary" onClick={handleSave} disabled={loading}>
@@ -340,13 +338,20 @@ export default function TaskModal({ task, onClose, onSave }: TaskModalProps) {
   )
 }
 
-// Build Google Calendar quick-add URL (works without OAuth)
+function CalendarIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+      <rect x="3" y="4" width="18" height="18" rx="2" stroke="#4285F4" strokeWidth="2"/>
+      <path d="M16 2v4M8 2v4M3 10h18" stroke="#4285F4" strokeWidth="2" strokeLinecap="round"/>
+      <circle cx="12" cy="16" r="2" fill="#34A853"/>
+    </svg>
+  )
+}
+
 function buildGCalLink(task: Task): string {
   const base = 'https://calendar.google.com/calendar/render?action=TEMPLATE'
   const title = encodeURIComponent(`[Polis OS] ${task.title}`)
-  const details = encodeURIComponent(
-    `Responsável: ${task.responsible_name || '—'}\nMódulo: ${moduleLabel(task.module)}\nPrioridade: ${priorityLabel(task.priority)}\nObjetivo: ${task.strategic_objective}\n\nVer no Polis OS: https://project-5s2kg.vercel.app/dashboard/tarefas`
-  )
+  const details = encodeURIComponent(`Responsável: ${task.responsible_name || '—'}\nMódulo: ${moduleLabel(task.module)}\nPrioridade: ${priorityLabel(task.priority)}\nObjetivo: ${task.strategic_objective}\n\nhttps://project-5s2kg.vercel.app/dashboard/tarefas`)
   const date = task.due_date?.replace(/-/g, '') || ''
   return `${base}&text=${title}&details=${details}&dates=${date}/${date}`
 }

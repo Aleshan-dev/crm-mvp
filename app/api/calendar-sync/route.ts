@@ -1,93 +1,111 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
+import { createClient } from '@supabase/supabase-js'
+
+const SUPABASE_URL = 'https://bvjykuhwfgcskwdnvmkf.supabase.co'
+const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ2anlrdWh3Zmdjc2t3ZG52bWtmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NjcwNzA1NSwiZXhwIjoyMDkyMjgzMDU1fQ.Hx7wRenzhtJC-8vcJhIvYXU-AMyXfawg-u7uHGvj490'
 
 export async function POST(request: NextRequest) {
   try {
-    const cookieStore = await cookies()
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      { cookies: { getAll: () => cookieStore.getAll(), setAll: (c) => c.forEach(({ name, value, options }) => cookieStore.set(name, value, options)) } }
-    )
+    const { taskId, title, description, dueDate, priority, module, responsibleUserId } = await request.json()
 
-    // Get current session (includes Google access token if logged in with Google)
-    const { data: { session } } = await supabase.auth.getSession()
+    if (!dueDate) return NextResponse.json({ error: 'no_due_date', skipped: true }, { status: 200 })
+    if (!responsibleUserId) return NextResponse.json({ error: 'no_responsible', skipped: true }, { status: 200 })
 
-    if (!session) {
-      return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
-    }
+    // Use service role to fetch the responsible user's Google token
+    const adminSupabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+      auth: { autoRefreshToken: false, persistSession: false }
+    })
 
-    const providerToken = session.provider_token
-    if (!providerToken) {
+    const { data: tokenRow, error: tokenErr } = await adminSupabase
+      .from('user_google_tokens')
+      .select('access_token, refresh_token, expires_at')
+      .eq('user_id', responsibleUserId)
+      .single()
+
+    if (tokenErr || !tokenRow) {
       return NextResponse.json({
-        error: 'Token do Google não disponível. Faça login com Google para sincronizar o calendário.',
-        needsGoogleLogin: true
-      }, { status: 403 })
+        error: 'no_google_token',
+        message: 'O responsável ainda não conectou o Google Calendar. Peça que ele faça login com Google no Polis OS.',
+        skipped: true,
+      }, { status: 200 })
     }
 
-    const { taskId, title, description, dueDate, priority, module } = await request.json()
+    let accessToken = tokenRow.access_token
 
-    if (!dueDate) {
-      return NextResponse.json({ error: 'Tarefa sem prazo definido' }, { status: 400 })
+    // Refresh token if expired
+    if (tokenRow.expires_at && new Date(tokenRow.expires_at) <= new Date()) {
+      if (tokenRow.refresh_token) {
+        try {
+          const refreshRes = await fetch('https://oauth2.googleapis.com/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+              client_id: process.env.GOOGLE_CLIENT_ID || '',
+              client_secret: process.env.GOOGLE_CLIENT_SECRET || '',
+              refresh_token: tokenRow.refresh_token,
+              grant_type: 'refresh_token',
+            }),
+          })
+          const refreshData = await refreshRes.json()
+          if (refreshData.access_token) {
+            accessToken = refreshData.access_token
+            // Update stored token
+            await adminSupabase.from('user_google_tokens').update({
+              access_token: accessToken,
+              expires_at: new Date(Date.now() + (refreshData.expires_in || 3600) * 1000).toISOString(),
+            }).eq('user_id', responsibleUserId)
+          }
+        } catch (e) {
+          console.warn('Token refresh failed:', e)
+        }
+      }
     }
 
-    // Build Google Calendar event
+    // Build event
     const priorityEmoji: Record<string, string> = { critica: '🔴', alta: '🟡', media: '🔵', baixa: '⚪' }
-    const emoji = priorityEmoji[priority] || '📌'
-
-    const startDate = new Date(dueDate + 'T09:00:00')
-    const endDate = new Date(dueDate + 'T10:00:00')
+    const colorId: Record<string, string> = { critica: '11', alta: '5', media: '9', baixa: '8' }
 
     const event = {
-      summary: `${emoji} [Polis OS] ${title}`,
+      summary: `${priorityEmoji[priority] || '📌'} [Polis OS] ${title}`,
       description: [
-        description ? `📋 ${description}` : '',
-        `🎯 ${module?.toUpperCase() || 'GERAL'}`,
-        `\n🔗 Ver no Polis OS: https://project-5s2kg.vercel.app/dashboard/tarefas`,
-        `\n🆔 Task ID: ${taskId}`,
+        description ? `${description}\n` : '',
+        `Módulo: ${module?.toUpperCase() || 'GERAL'}`,
+        `Prioridade: ${priority?.toUpperCase()}`,
+        `\nVer no Polis OS: https://project-5s2kg.vercel.app/dashboard/tarefas`,
+        `ID: ${taskId}`,
       ].filter(Boolean).join('\n'),
       start: { date: dueDate },
       end: { date: dueDate },
-      colorId: priority === 'critica' ? '11' : priority === 'alta' ? '5' : priority === 'media' ? '9' : '8',
+      colorId: colorId[priority] || '8',
       reminders: {
         useDefault: false,
         overrides: [
-          { method: 'popup', minutes: 24 * 60 }, // 1 day before
-          { method: 'popup', minutes: 60 },       // 1 hour before
+          { method: 'popup', minutes: 24 * 60 },
+          { method: 'popup', minutes: 60 },
         ],
       },
     }
 
-    // Create event via Google Calendar API
-    const calRes = await fetch(
-      'https://www.googleapis.com/calendar/v3/calendars/primary/events',
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${providerToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(event),
-      }
-    )
+    // Create event in responsible user's Google Calendar
+    const calRes = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(event),
+    })
 
     if (!calRes.ok) {
       const calErr = await calRes.json()
-      console.error('Google Calendar error:', calErr)
-      return NextResponse.json({
-        error: calErr.error?.message || 'Erro ao criar evento no Google Calendar'
-      }, { status: 400 })
+      console.error('GCal error:', calErr)
+      return NextResponse.json({ error: calErr.error?.message || 'Erro no Google Calendar' }, { status: 400 })
     }
 
     const calEvent = await calRes.json()
-
-    return NextResponse.json({
-      success: true,
-      eventId: calEvent.id,
-      eventLink: calEvent.htmlLink,
-    })
+    return NextResponse.json({ success: true, eventId: calEvent.id, eventLink: calEvent.htmlLink })
 
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : 'Erro interno'
